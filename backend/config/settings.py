@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -36,16 +37,32 @@ TEMPLATES = [{
 }]
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {"default": {
-    "ENGINE": "django.db.backends.postgresql",
-    "NAME": os.environ.get("DB_NAME", "kadal"),
-    "USER": os.environ.get("DB_USER", "postgres"),
-    "PASSWORD": os.environ.get("DB_PASSWORD", "postgres"),
-    "HOST": os.environ.get("DB_HOST", "localhost"),
-    "PORT": os.environ.get("DB_PORT", "5432"),
-    # Neon (and any hosted Postgres) requires SSL; local Postgres does not
-    "OPTIONS": {"sslmode": os.environ.get("DB_SSLMODE", "disable" if os.environ.get("DB_HOST", "localhost") in ("localhost", "127.0.0.1") else "require")},
-}}
+def _database():
+    """Use one connection string (DATABASE_URL, or DB_URLS) if given - e.g. Neon's postgresql://user:pass@host/db?sslmode=require
+    otherwise fall back to the separate DB_* variables."""
+    url = os.environ.get("DATABASE_URL") or os.environ.get("DB_URLS")
+    if url:
+        u = urlparse(url.strip())
+        return {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": u.path.lstrip("/"), "USER": unquote(u.username or ""), "PASSWORD": unquote(u.password or ""),
+            "HOST": u.hostname or "localhost", "PORT": str(u.port or 5432),
+            "OPTIONS": {"sslmode": (parse_qs(u.query).get("sslmode") or ["require"])[0]},
+        }
+    host = os.environ.get("DB_HOST", "localhost")
+    return {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("DB_NAME", "kadal"),
+        "USER": os.environ.get("DB_USER", "postgres"),
+        "PASSWORD": os.environ.get("DB_PASSWORD", "postgres"),
+        "HOST": host,
+        "PORT": os.environ.get("DB_PORT", "5432"),
+        # Neon (and any hosted Postgres) requires SSL; local Postgres does not
+        "OPTIONS": {"sslmode": os.environ.get("DB_SSLMODE", "disable" if host in ("localhost", "127.0.0.1") else "require")},
+    }
+
+
+DATABASES = {"default": _database()}
 
 AUTH_USER_MODEL = "accounts.User"
 LANGUAGE_CODE = "en-us"
