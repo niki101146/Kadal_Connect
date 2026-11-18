@@ -37,7 +37,7 @@ def fetch(url):
                 return json.load(r)
         except Exception as e:  # noqa: BLE001
             log.warning("Open-Meteo request failed (attempt %s): %s", attempt + 1, e)
-            if attempt == 1:
+            if attempt == 1 or "429" in str(e):
                 raise
             time.sleep(1.5)
 
@@ -119,10 +119,45 @@ def trend(hours):
     return {"direction": "STEADY", "text": f"Seas should stay close to {a:.1f} m over the next day or two."}
 
 
+def build_weather(sea, air):
+    """Turn the raw Open-Meteo marine + weather JSON into the advisory/forecast shape the app uses."""
+    cs, ca, ds, da = sea.get("current", {}), air.get("current", {}), sea.get("daily", {}), air.get("daily", {})
+    level, text = advisory(cs.get("wave_height") or 0, ca.get("wind_gusts_10m") or 0)
+    days = []
+    for i, date in enumerate(da.get("time", [])):
+        w, g = at(ds, "wave_height_max", i), at(da, "wind_gusts_10m_max", i)
+        rain = at(da, "precipitation_probability_max", i)
+        days.append({"date": date, "wave_max": w, "gust_max": g, "rain": rain,
+                     "temp_max": at(da, "temperature_2m_max", i), "temp_min": at(da, "temperature_2m_min", i),
+                     "uv": at(da, "uv_index_max", i), "code": at(da, "weather_code", i),
+                     "sunrise": at(da, "sunrise", i), "sunset": at(da, "sunset", i),
+                     "score": fishing_score(w, g, rain), "level": advisory(w or 0, g or 0)[0]})
+    hours = build_hours(sea, air, ca.get("time"))
+    data = {"wave_height_m": cs.get("wave_height"), "wave_period_s": cs.get("wave_period"),
+            "wave_dir": cs.get("wave_direction"), "wind_kmh": ca.get("wind_speed_10m"),
+            "wind_dir": ca.get("wind_direction_10m"), "gust_kmh": ca.get("wind_gusts_10m"),
+            "temp_c": ca.get("temperature_2m"), "humidity": ca.get("relative_humidity_2m"),
+            "pressure_hpa": ca.get("pressure_msl"), "cloud_pct": ca.get("cloud_cover"),
+            "code": ca.get("weather_code"),
+            "sunrise": at(da, "sunrise", 0), "sunset": at(da, "sunset", 0),
+            "rain_pct": at(da, "precipitation_probability_max", 0), "updated": ca.get("time"),
+            "level": level, "advice": text, "forecast": days, "hourly": hours,
+            "best_windows": best_windows(hours), "trend": trend(hours)}
+    return data
+
+
+def _harbor_payload(harbor):
+    return {"id": harbor.pk, "name": harbor.name, "latitude": harbor.latitude, "longitude": harbor.longitude}
+
+
+def _pick_harbor(request):
+    return Harbor.objects.filter(pk=request.query_params.get("harbor") or None).first() or Harbor.objects.first()
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def weather(request):
-    harbor = Harbor.objects.filter(pk=request.query_params.get("harbor") or None).first() or Harbor.objects.first()
+    harbor = _pick_harbor(request)
     if not harbor:
         return Response({"detail": "No harbors yet. Run: python manage.py seed"}, status=404)
     key = f"wx3:{harbor.pk}"
@@ -131,38 +166,37 @@ def weather(request):
         try:
             sea = fetch(MARINE.format(lat=harbor.latitude, lon=harbor.longitude))
             air = fetch(WIND.format(lat=harbor.latitude, lon=harbor.longitude))
+            data = build_weather(sea, air)
         except Exception:
             data = cache.get(key + ":stale")  # show the last good forecast rather than an error
             if not data:
-                return Response({"detail": "Weather service is not reachable. Try again shortly."}, status=502)
-            return Response({"harbor": {"id": harbor.pk, "name": harbor.name,
-                                        "latitude": harbor.latitude, "longitude": harbor.longitude}, **data})
-        cs, ca, ds, da = sea.get("current", {}), air.get("current", {}), sea.get("daily", {}), air.get("daily", {})
-        level, text = advisory(cs.get("wave_height") or 0, ca.get("wind_gusts_10m") or 0)
-        days = []
-        for i, date in enumerate(da.get("time", [])):
-            w, g = at(ds, "wave_height_max", i), at(da, "wind_gusts_10m_max", i)
-            rain = at(da, "precipitation_probability_max", i)
-            days.append({"date": date, "wave_max": w, "gust_max": g, "rain": rain,
-                         "temp_max": at(da, "temperature_2m_max", i), "temp_min": at(da, "temperature_2m_min", i),
-                         "uv": at(da, "uv_index_max", i), "code": at(da, "weather_code", i),
-                         "sunrise": at(da, "sunrise", i), "sunset": at(da, "sunset", i),
-                         "score": fishing_score(w, g, rain), "level": advisory(w or 0, g or 0)[0]})
-        hours = build_hours(sea, air, ca.get("time"))
-        data = {"wave_height_m": cs.get("wave_height"), "wave_period_s": cs.get("wave_period"),
-                "wave_dir": cs.get("wave_direction"), "wind_kmh": ca.get("wind_speed_10m"),
-                "wind_dir": ca.get("wind_direction_10m"), "gust_kmh": ca.get("wind_gusts_10m"),
-                "temp_c": ca.get("temperature_2m"), "humidity": ca.get("relative_humidity_2m"),
-                "pressure_hpa": ca.get("pressure_msl"), "cloud_pct": ca.get("cloud_cover"),
-                "code": ca.get("weather_code"),
-                "sunrise": at(da, "sunrise", 0), "sunset": at(da, "sunset", 0),
-                "rain_pct": at(da, "precipitation_probability_max", 0), "updated": ca.get("time"),
-                "level": level, "advice": text, "forecast": days, "hourly": hours,
-                "best_windows": best_windows(hours), "trend": trend(hours)}
-        cache.set(key, data, 600)
-        cache.set(key + ":stale", data, 6 * 3600)
-    return Response({"harbor": {"id": harbor.pk, "name": harbor.name,
-                                "latitude": harbor.latitude, "longitude": harbor.longitude}, **data})
+                # Open-Meteo often rate-limits shared hosting IPs (HTTP 429). Hand the browser the source URLs so it can
+                # fetch them from the visitor's own connection and send them to /weather/compute/ (see frontend api.js).
+                return Response({"detail": "Weather service is not reachable. Try again shortly.",
+                                 "sources": {"marine": MARINE.format(lat=harbor.latitude, lon=harbor.longitude),
+                                             "air": WIND.format(lat=harbor.latitude, lon=harbor.longitude)}}, status=502)
+        else:
+            cache.set(key, data, 600)
+            cache.set(key + ":stale", data, 6 * 3600)
+    return Response({"harbor": _harbor_payload(harbor), **data})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def weather_compute(request):
+    """Fallback: the browser fetched Open-Meteo itself. We compute the advisory but never cache it, so a made-up
+    payload can only ever affect the person who sent it - never the forecast other fishermen see."""
+    harbor = _pick_harbor(request)
+    if not harbor:
+        return Response({"detail": "No harbors yet."}, status=404)
+    sea, air = request.data.get("sea"), request.data.get("air")
+    if not isinstance(sea, dict) or not isinstance(air, dict):
+        return Response({"detail": "Invalid weather data."}, status=400)
+    try:
+        data = build_weather(sea, air)
+    except Exception:
+        return Response({"detail": "Invalid weather data."}, status=400)
+    return Response({"harbor": _harbor_payload(harbor), **data})
 
 
 @api_view(["GET"])
