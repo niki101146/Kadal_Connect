@@ -1,4 +1,6 @@
 import json
+import logging
+import time
 import urllib.request
 from django.core.cache import cache
 from django.db.models import Q
@@ -23,9 +25,21 @@ WIND = ("https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
         "&forecast_days=7&timezone=Asia%2FKolkata")
 
 
+log = logging.getLogger(__name__)
+
+
 def fetch(url):
-    with urllib.request.urlopen(url, timeout=8) as r:
-        return json.load(r)
+    # identify ourselves (Open-Meteo may refuse the default "Python-urllib" agent) and retry once on a hiccup / rate limit
+    req = urllib.request.Request(url, headers={"User-Agent": "KadalConnect/1.0 (fishermen sea advisory)", "Accept": "application/json"})
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return json.load(r)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Open-Meteo request failed (attempt %s): %s", attempt + 1, e)
+            if attempt == 1:
+                raise
+            time.sleep(1.5)
 
 
 def at(d, key, i):
@@ -118,7 +132,11 @@ def weather(request):
             sea = fetch(MARINE.format(lat=harbor.latitude, lon=harbor.longitude))
             air = fetch(WIND.format(lat=harbor.latitude, lon=harbor.longitude))
         except Exception:
-            return Response({"detail": "Weather service is not reachable. Try again shortly."}, status=502)
+            data = cache.get(key + ":stale")  # show the last good forecast rather than an error
+            if not data:
+                return Response({"detail": "Weather service is not reachable. Try again shortly."}, status=502)
+            return Response({"harbor": {"id": harbor.pk, "name": harbor.name,
+                                        "latitude": harbor.latitude, "longitude": harbor.longitude}, **data})
         cs, ca, ds, da = sea.get("current", {}), air.get("current", {}), sea.get("daily", {}), air.get("daily", {})
         level, text = advisory(cs.get("wave_height") or 0, ca.get("wind_gusts_10m") or 0)
         days = []
@@ -142,6 +160,7 @@ def weather(request):
                 "level": level, "advice": text, "forecast": days, "hourly": hours,
                 "best_windows": best_windows(hours), "trend": trend(hours)}
         cache.set(key, data, 600)
+        cache.set(key + ":stale", data, 6 * 3600)
     return Response({"harbor": {"id": harbor.pk, "name": harbor.name,
                                 "latitude": harbor.latitude, "longitude": harbor.longitude}, **data})
 
