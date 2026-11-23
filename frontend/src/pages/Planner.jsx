@@ -7,8 +7,9 @@ import { BOATS, Field, Icon, Notice, PageHead, Skeleton, clock, hour12, dayName 
 const CHECK = ["Life jackets for everyone on board", "Fuel and engine checked", "Phone charged, number of Coast Guard saved (1554)", "Torch, whistle and first-aid kit", "Drinking water and food", "Tell family your landing point and return time", "Nets and ropes secured", "Compass or GPS working"];
 
 export default function Planner() {
-  const { id, harbor } = useHarbor();
+  const { id, harbor, harborError, reloadHarbors } = useHarbor();
   const wx = useApi(`/weather/?harbor=${id}`, { skip: !id });
+  const werr = wx.error || (!id && harborError ? `Cannot reach the server (${harborError})` : "");
   const [boat, setBoat] = useState("medium");
   const [day, setDay] = useState(0);
   const [start, setStart] = useState(5);
@@ -63,7 +64,7 @@ export default function Planner() {
         </section>
 
         <section className="panel">
-          {wx.loading && !w ? <Skeleton h={220} /> : !w ? <Notice kind="bad">{wx.error}</Notice> : !plan || plan.empty ? <div className="soft-empty">That start time has already passed or is outside the forecast. Pick a later time.</div> : (
+          {!w && !werr ? <Skeleton h={220} /> : !w ? <><Notice kind="bad">{werr}</Notice> <button className="btn ghost sm" onClick={() => { reloadHarbors(); wx.reload(); }}>Try again</button></> : !plan || plan.empty ? <div className="soft-empty">That start time has already passed or is outside the forecast. Pick a later time.</div> : (
             <>
               <div className={`plan-verdict ${V[plan.verdict][1]}`}>
                 <span className="verdict-dot" /><div><small>Prediction for your trip</small><h2>{V[plan.verdict][0]}</h2></div>

@@ -20,11 +20,11 @@ export default function App() {
   const { user } = useAuth();
   const { pathname } = useLocation();
   const [now, setNow] = useState(new Date());
-  useEffect(() => window.scrollTo(0, 0), [pathname]);
+  useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 60000); return () => clearInterval(t); }, []);
 
   const [menu, setMenu] = useState(false);
-  useEffect(() => setMenu(false), [pathname]);
+  useEffect(() => { setMenu(false); }, [pathname]);
   useEffect(() => {
     document.body.style.overflow = menu ? "hidden" : "";
     const esc = (e) => e.key === "Escape" && setMenu(false);

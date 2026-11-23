@@ -10,10 +10,11 @@ const Quick = ({ to, icon, title, sub }) => (
 );
 
 export default function Home() {
-  const { id, harbor } = useHarbor();
+  const { id, harbor, harborError, reloadHarbors } = useHarbor();
   const { user } = useAuth();
   const on = !!id;
   const wxd = useApi(`/weather/?harbor=${id}`, { skip: !on });
+  const werr = wxd.error || (!id && harborError ? `Cannot reach the server (${harborError})` : "");
   const al = useApi(`/alerts/?harbor=${id}`, { skip: !on, asList: true });
   const pr = useApi(`/prices/?harbor=${id}`, { skip: !on, asList: true });
   const ls = useApi("/listings/", { asList: true });
@@ -41,14 +42,14 @@ export default function Home() {
       <section className="dash">
         <article className={`card sea-card ${w ? LEVEL[w.level].cls : ""}`}>
           <header><h2><Icon name="wave" size={18} /> Sea conditions</h2><Link to="/sea" className="text-link">Full forecast →</Link></header>
-          {wxd.loading && !w ? <Skeleton h={150} /> : w ? (
+          {!w && !werr ? <Skeleton h={150} /> : w ? (
             <>
               <div className="sea-top"><div><span className="level-badge"><i />{LEVEL[w.level].label}</span><p>{w.advice}</p></div><div className="sea-temp"><span>{wx(w.code).icon}</span><b>{w.temp_c != null ? Math.round(w.temp_c) : "–"}°</b><small>{wx(w.code).label}</small></div></div>
               <div className="sea-stats"><div><small>Waves</small><b>{w.wave_height_m ?? "–"} m</b></div><div><small>Gusts</small><b>{w.gust_kmh ?? "–"} km/h</b></div><div><small>Wind</small><b>{compass(w.wind_dir)}</b></div><div><small>Rain</small><b>{w.rain_pct ?? "–"}%</b></div></div>
               <div className="next-hours" aria-label="Next hours prediction">{w.hourly.filter((_, i) => i % 3 === 0).slice(0, 8).map((h) => <div key={h.time} className={`nh ${LEVEL[h.level].cls}`}><small>{hour12(h.time)}</small><span>{wx(h.code).icon}</span><b>{h.wave ?? "–"}m</b></div>)}</div>
               <p className="predict"><Icon name="trend" size={16} /> <b>Prediction:</b> {w.trend?.text} {win && <>Best window {dayName(win.date, 0) === "Today" && win.date === w.hourly[0].time.slice(0, 10) ? "today" : "tomorrow"} {win.start}–{win.end}.</>}</p>
             </>
-          ) : <p className="muted">{wxd.error || "Choose a harbor to see conditions."}</p>}
+          ) : <p className="muted">{werr || "Choose a harbor to see conditions."} <button className="btn ghost sm" onClick={() => { reloadHarbors(); wxd.reload(); }}>Try again</button></p>}
         </article>
 
         <article className="card price-card">

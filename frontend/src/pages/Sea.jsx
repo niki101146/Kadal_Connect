@@ -15,8 +15,9 @@ const SERIES = {
 };
 
 export default function Sea() {
-  const { id } = useHarbor();
+  const { id, harborError, reloadHarbors } = useHarbor();
   const wxd = useApi(`/weather/?harbor=${id}`, { skip: !id });
+  const werr = wxd.error || (!id && harborError ? `Cannot reach the server (${harborError})` : "");
   const al = useApi(`/alerts/?harbor=${id}`, { skip: !id, asList: true });
   const [series, setSeries] = useState("wave");
   const [range, setRange] = useState(24);
@@ -35,7 +36,7 @@ export default function Sea() {
         <Link className="btn sm" to="/planner"><Icon name="route" size={16} /> Plan a trip</Link>
       </PageHead>
 
-      {wxd.loading && !w ? <Skeleton h={220} /> : w ? <Verdict w={w} /> : <Notice kind="bad">{wxd.error}</Notice>}
+      {!w && !werr ? <Skeleton h={220} /> : w ? <Verdict w={w} /> : <><Notice kind="bad">{werr}</Notice> <button className="btn ghost sm" onClick={() => { reloadHarbors(); wxd.reload(); }}>Try again</button></>}
 
       {w && (
         <>

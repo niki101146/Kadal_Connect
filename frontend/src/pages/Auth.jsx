@@ -14,7 +14,7 @@ export default function Auth({ mode }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [f, setF] = useState({ username: "", password: "", first_name: "", phone: "", town: "", address: "", role: "BUYER", harbor: "" });
-  useEffect(() => setErr(""), [mode]);
+  useEffect(() => { setErr(""); }, [mode]);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
   async function submit(e) {

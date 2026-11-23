@@ -2,6 +2,7 @@ import json
 import logging
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from django.core.cache import cache
 from django.db.models import Q
 from rest_framework.decorators import api_view, permission_classes
@@ -33,13 +34,21 @@ def fetch(url):
     req = urllib.request.Request(url, headers={"User-Agent": "KadalConnect/1.0 (fishermen sea advisory)", "Accept": "application/json"})
     for attempt in range(2):
         try:
-            with urllib.request.urlopen(req, timeout=15) as r:
+            with urllib.request.urlopen(req, timeout=8) as r:
                 return json.load(r)
         except Exception as e:  # noqa: BLE001
             log.warning("Open-Meteo request failed (attempt %s): %s", attempt + 1, e)
             if attempt == 1 or "429" in str(e):
                 raise
-            time.sleep(1.5)
+            time.sleep(0.5)
+
+
+def fetch_both(lat, lon):
+    """Marine + weather requests run at the same time, so the page waits for the slower one, not the sum."""
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        sea = pool.submit(fetch, MARINE.format(lat=lat, lon=lon))
+        air = pool.submit(fetch, WIND.format(lat=lat, lon=lon))
+        return sea.result(), air.result()
 
 
 def at(d, key, i):
@@ -164,8 +173,7 @@ def weather(request):
     data = cache.get(key)
     if not data:
         try:
-            sea = fetch(MARINE.format(lat=harbor.latitude, lon=harbor.longitude))
-            air = fetch(WIND.format(lat=harbor.latitude, lon=harbor.longitude))
+            sea, air = fetch_both(harbor.latitude, harbor.longitude)
             data = build_weather(sea, air)
         except Exception:
             data = cache.get(key + ":stale")  # show the last good forecast rather than an error
